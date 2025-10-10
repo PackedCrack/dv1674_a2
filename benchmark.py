@@ -32,7 +32,7 @@ def make_blur_outdirs():
     name = "blur_result"
     erase_dir(name)
 
-    subdirs = ["128", "256", "512", "1024"]
+    subdirs = ["im1", "im2", "im3", "im4"]
     make_subdirs(name, subdirs)
 
 def profile_time(exe: str, inData : str, outData: str, outDir: str):
@@ -53,10 +53,11 @@ def profile_time(exe: str, inData : str, outData: str, outDir: str):
         delta = end - start
         f.write("Wall Time: " + f"{delta:.9f}\n")
     
-def profile_cpu(exe: str, inData : str, outData: str, outDir: str):
-    print("CPU Profiling {} {}".format(exe, inData))
+def profile_cpu(exe: str, inData : str, outData: str, outDir: str, radius = None, threads = None):
+    print("\n\nCPU Profiling {} {}".format(exe, inData))
 
     out = outDir + "/hotspot"
+
     command = [ 
         "sudo",
         "perf", "record", 
@@ -66,10 +67,14 @@ def profile_cpu(exe: str, inData : str, outData: str, outDir: str):
         "--call-graph=dwarf", 
         "-o", str(out), 
         "--", 
-        str(exe),
-        str(inData),
-        str(outData)
+        str(exe)
     ]
+    if radius != None:
+        command.append(str(radius))
+    command.append(str(inData))
+    command.append(str(outData))
+    if threads != None:
+        command.append(str(threads))
     
     with open(os.devnull, "wb") as n:
         subprocess.run(command, check = True, stdout = n)
@@ -82,15 +87,19 @@ def profile_cpu(exe: str, inData : str, outData: str, outDir: str):
         "-e", "cycles,instructions,cache-references,cache-misses,branches,branch-misses,context-switches", 
         "-o", str(out), 
         "--", 
-        str(exe),
-        str(inData),
-        str(outData)
+        str(exe)
     ]
+    if radius != None:
+        command.append(str(radius))
+    command.append(str(inData))
+    command.append(str(outData))
+    if threads != None:
+        command.append(str(threads))
         
     with open(os.devnull, "wb") as n:
         subprocess.run(command, check = True, stdout = n)
 
-def profile_memory(exe: str, inData : str, outData: str, outDir: str):
+def profile_memory(exe: str, inData : str, outData: str, outDir: str, radius = None, threads = None):
     print("\n\nMemory Profiling {} {}".format(exe, inData))
 
     out = outDir + "/heaptrack-out"
@@ -99,10 +108,15 @@ def profile_memory(exe: str, inData : str, outData: str, outDir: str):
         "heaptrack",
         "--output",
         str(out), 
-        str(exe),
-        str(inData),
-        str(outData)
+        str(exe)
     ]
+    if radius != None:
+        cmd.append(str(radius))
+    cmd.append(str(inData))
+    cmd.append(str(outData))
+    if threads != None:
+        cmd.append(str(threads))
+
     with open(os.devnull, "wb") as n:
         subprocess.run(cmd, check = True, stdout = n, stderr = n)
     
@@ -116,16 +130,20 @@ def profile_memory(exe: str, inData : str, outData: str, outDir: str):
     with open(newOut,"w") as f:
         subprocess.run(cmd, check = True, stdout = f)
 
-def profile_io(exe: str, inData : str, outData: str, outDir: str):
+def profile_io(exe: str, inData : str, outData: str, outDir: str, radius = None, threads = None):
     print("\n\nIO Profiling {} {}".format(exe, inData))
 
     out = outDir + "/disk.txt"
     with open(out, "wb") as f:
         cmd = [
-            str(exe),
-            str(inData),
-            str(outData)
+            str(exe)
         ]
+        if radius != None:
+            cmd.append(str(radius))
+        cmd.append(str(inData))
+        cmd.append(str(outData))
+        if threads != None:
+            cmd.append(str(threads))
         p = subprocess.Popen(cmd, stdout = subprocess.DEVNULL)
 
         cmd = [
@@ -192,10 +210,10 @@ def blur_baseline():
         "./blur/data_o/im4_seq.ppm"
     ]
     outDirs = [
-        "./blur_result/128",
-        "./blur_result/256",
-        "./blur_result/512",
-        "./blur_result/1024"
+        "./blur_result/im1",
+        "./blur_result/im2",
+        "./blur_result/im3",
+        "./blur_result/im4"
     ]
     
 
@@ -205,12 +223,12 @@ def blur_baseline():
         outDir = outDirs[index]
 
         #profile_time(exe, i, o, outDir)
-        profile_cpu(exe, i, o, outDir)
-        profile_memory(exe, i, o, outDir)
-        profile_io(exe, i, o, outDir)
+        profile_cpu(exe, i, o, outDir, 15)
+        profile_memory(exe, i, o, outDir, 15)
+        profile_io(exe, i, o, outDir, 15)
 
 def baseline():
-    pearson_baseline()
+    #pearson_baseline()
     blur_baseline()
 
 
