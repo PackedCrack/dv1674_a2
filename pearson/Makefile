@@ -28,4 +28,4 @@ verify: verify.c
 	$(CC) verify.c -o verify
 
 clean:
-	rm -rf verify pearson pearson_par *.res *.args.0 *.ltrans_args *.ltrans.out *.ii *.s *.o *.dSYM 2> /dev/null
+	rm -rf verify pearson pearson_par optimization3/*.ii optimization3/*.o optimization3/*.s *.res *.args.0 *.ltrans_args *.ltrans.out *.ii *.s *.o *.dSYM 2> /dev/null
