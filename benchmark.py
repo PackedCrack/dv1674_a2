@@ -228,7 +228,7 @@ def blur_baseline():
         profile_io(exe, i, o, outDir, 15)
 
 def baseline():
-    #pearson_baseline()
+    pearson_baseline()
     blur_baseline()
 
 
@@ -250,5 +250,5 @@ def benchmark():
 make_pearson_outdirs()
 make_blur_outdirs()
 
-baseline()
+#baseline()
 #benchmark()
