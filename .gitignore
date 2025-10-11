@@ -2,6 +2,8 @@
 /blur_result
 .idea
 *.o
+*.d
+*.opt.d
 blur/blur
 blur/verify
 blur/blur_par

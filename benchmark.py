@@ -25,7 +25,10 @@ def make_pearson_outdirs():
     name = "pearson_result"
     erase_dir(name)
 
-    subdirs = ["128", "256", "512", "1024"]
+    subdirs = ["128", "128_t1", "128_t3", "128_t6","128_t9", "128_t12",
+               "256", "256_t1", "256_t3", "256_t6","256_t9", "256_t12",
+               "512", "512_t1", "512_t3", "512_t6","512_t9", "512_t12",
+               "1024", "1024_t1", "1024_t3", "1024_t6","1024_t9", "1024_t12"]
     make_subdirs(name, subdirs)
 
 def make_blur_outdirs():
@@ -231,24 +234,46 @@ def baseline():
     pearson_baseline()
     blur_baseline()
 
+def pearson_benchmark():
+    exe = "./pearson/pearson_par"
+    inData = [
+        "./pearson/data/128.data",
+        "./pearson/data/256.data",
+        "./pearson/data/512.data",
+        "./pearson/data/1024.data"
+    ]
+    outData = [
+        "./pearson/data_o/128_seq.data",
+        "./pearson/data_o/256_seq.data",
+        "./pearson/data_o/512_seq.data",
+        "./pearson/data_o/1024_seq.data"
+    ]
+    outDirs = [
+        "./pearson_result/128",
+        "./pearson_result/256",
+        "./pearson_result/512",
+        "./pearson_result/1024"
+    ]
+
+    threads = [1, 3, 6, 9, 12]
+    for index in range(0, 4):
+        for threadCount in threads:
+            i = inData[index]
+            o = outData[index]
+            outDir = outDirs[index]
+            outDir = outDir + "_t" + str(threadCount)
+
+            profile_cpu(exe, i, o, outDir, threads = threadCount)
+            profile_memory(exe, i, o, outDir, threads = threadCount)
+            #profile_io(exe, i, o, outDir, threads = threadCount)
+            break
 
 def benchmark():
-    files = [ pearsonParFilepath, blurParFilepath ]
-    threads = [1, 3, 6, 9, 12]
-    for file in files:
-        for count in threads:
-            cpu_profile = make_cpu_profiling2("cpu", file, count)
-            cpu_profile()
-
-            memory_profile = make_memory_profiling("memory", file, count)
-            memory_profile()
-
-            io_profile = make_io_profiling("disk", file, count)
-            io_profile()
+    pearson_benchmark()
 
 
 make_pearson_outdirs()
 make_blur_outdirs()
 
 #baseline()
-#benchmark()
+benchmark()
