@@ -174,20 +174,35 @@ namespace
     }
     void save_results(char** argv, std::span<const double> results)
     {
-        const char* filepath = argv[2];
-        std::fstream file{ filepath, std::ios::out | std::ios::trunc };
-        if (!file.is_open())
+        // The File RAII wrapper wasn't written with writing in mind so its easier to just do this raw..
+        std::int32_t fileDescriptor = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, 0644);
+        assert(fileDescriptor == 0);
+
+        static constexpr std::size_t maxLineSize = 128;
+        std::size_t maxFilesize = results.size() * maxLineSize;
+        ftruncate(fileDescriptor, static_cast<off_t>(maxFilesize));
+
+        void* pMap = mmap(nullptr, maxFilesize, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor, 0);
+        assert(pMap != MAP_FAILED);
+
+        char* pWrite = static_cast<char*>(pMap);
+        char* const pEnd  = pWrite + maxFilesize;
+
+        for (auto&& result : results)
         {
-            std::printf("\nFailed to open %s", filepath);
-            std::exit(1);
+            // Write number. Leave room for '\n'.
+            auto [ptr, ec] = std::to_chars(pWrite, pEnd - 1, result);
+            assert(ec == std::errc{});
+            *ptr = '\n';
+            ++ptr;
+            pWrite = ptr;
         }
 
-        std::array<char, 32> buffer{};
-        for (const auto& result : results)
-        {
-            std::snprintf(buffer.data(), buffer.size(), "%.17f\n", result);
-            file.write(buffer.data(), std::strlen(buffer.data()));
-        }
+        munmap(pMap, maxFilesize);
+
+        auto realSize = static_cast<std::ptrdiff_t>(pWrite - static_cast<char*>(pMap));
+        ftruncate(fileDescriptor, static_cast<off_t>(realSize));
+        close(fileDescriptor);
     }
 }   // namespace
 int main(int argc, char** argv)
@@ -201,16 +216,9 @@ int main(int argc, char** argv)
     Data data = load_data(argv);
 
     std::int32_t threadCount = std::stoi(argv[3]);
-    std::vector<double> results{};
-    if (threadCount == 0)
-    {
-        results = analysis::correlation_coefficients(data.buffer.data(), data.buffer.size(), data.stride);
-    }
-    else
-    {
-        ThreadPool tp{ threadCount };
-        results = analysis::correlation_coefficients(tp, data.buffer.data(), data.buffer.size(), data.stride);
-    }
+    ThreadPool tp{ threadCount };
+    std::vector<double> results =
+        analysis::correlation_coefficients(tp, data.buffer.data(), data.buffer.size(), data.stride);
 
     save_results(argv, results);
 
