@@ -198,12 +198,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::int32_t threadCount = std::stoi(argv[3]);
-    ThreadPool tp{ threadCount };
-
     Data data = load_data(argv);
 
-    auto results = analysis::correlation_coefficients(data.buffer.data(), data.buffer.size(), data.stride);
+    std::int32_t threadCount = std::stoi(argv[3]);
+    std::vector<double> results{};
+    if (threadCount == 0)
+    {
+        results = analysis::correlation_coefficients(data.buffer.data(), data.buffer.size(), data.stride);
+    }
+    else
+    {
+        ThreadPool tp{ threadCount };
+        results = analysis::correlation_coefficients(tp, data.buffer.data(), data.buffer.size(), data.stride);
+    }
 
     save_results(argv, results);
 
