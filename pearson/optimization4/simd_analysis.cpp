@@ -121,16 +121,16 @@ namespace analysis
         assert(stride == 128 || stride == 256 || stride == 512 || stride == 1024);
         assert(size % stride == 0);
 
-        std::size_t numVectors = size / stride;
+        std::size_t numVectors = size / static_cast<std::size_t>(stride);
         std::vector<double> results{};
         results.reserve(numVectors * (numVectors - 1) / 2);
 
         for (std::size_t i = 0; i < numVectors; ++i)
         {
-            const double* pX = pData + i * stride;
+            const double* pX = pData + i * static_cast<std::size_t>(stride);
             for (std::size_t j = i + 1; j < numVectors; ++j)
             {
-                const double* pY = pData + j * stride;
+                const double* pY = pData + j * static_cast<std::size_t>(stride);
 
                 double SUMX{};
                 double SUMY{};
