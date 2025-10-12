@@ -266,7 +266,6 @@ def pearson_benchmark():
             profile_cpu(exe, i, o, outDir, threads = threadCount)
             profile_memory(exe, i, o, outDir, threads = threadCount)
             #profile_io(exe, i, o, outDir, threads = threadCount)
-            break
 
 def benchmark():
     pearson_benchmark()
