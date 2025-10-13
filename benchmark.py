@@ -36,6 +36,10 @@ def make_blur_outdirs():
     erase_dir(name)
 
     subdirs = ["im1", "im2", "im3", "im4"]
+    subdirs = ["im1", "im1_t1", "im1_t3", "im1_t6","im1_t9", "im1_t12",
+               "im2", "im2_t1", "im2_t3", "im2_t6","im2_t9", "im2_t12",
+               "im3", "im3_t1", "im3_t3", "im3_t6","im3_t9", "im3_t12",
+               "im4", "im4_t1", "im4_t3", "im4_t6","im4_t9", "im4_t12"]
     make_subdirs(name, subdirs)
 
 def profile_time(exe: str, inData : str, outData: str, outDir: str):
@@ -100,7 +104,7 @@ def profile_cpu(exe: str, inData : str, outData: str, outDir: str, radius = None
         command.append(str(threads))
         
     with open(os.devnull, "wb") as n:
-        subprocess.run(command, check = True, stdout = n)
+        subprocess.run(command, check = True, stdout = n, stderr=subprocess.PIPE)
 
 def profile_memory(exe: str, inData : str, outData: str, outDir: str, radius = None, threads = None):
     print("\n\nMemory Profiling {} {}".format(exe, inData))
@@ -267,8 +271,42 @@ def pearson_benchmark():
             profile_memory(exe, i, o, outDir, threads = threadCount)
             #profile_io(exe, i, o, outDir, threads = threadCount)
 
+def blur_benchmark():
+    exe = "./blur/blur_par"
+    inData = [
+        "./blur/data/im1.ppm",
+        "./blur/data/im2.ppm",
+        "./blur/data/im3.ppm",
+        "./blur/data/im4.ppm"
+    ]
+    outData = [
+        "./blur/data_o/im1_par_bench.ppm",
+        "./blur/data_o/im2_par_bench.ppm",
+        "./blur/data_o/im3_par_bench.ppm",
+        "./blur/data_o/im4_par_bench.ppm"
+    ]
+    outDirs = [
+        "./blur_result/im1",
+        "./blur_result/im2",
+        "./blur_result/im3",
+        "./blur_result/im4"
+    ]
+
+    threads = [1]#, 3, 6, 9, 12]
+    for index in range(0, 4):
+        for threadCount in threads:
+            i = inData[index]
+            o = outData[index]
+            outDir = outDirs[index]
+            outDir = outDir + "_t" + str(threadCount)
+
+            profile_cpu(exe, i, o, outDir, radius = 15, threads = threadCount)
+            profile_memory(exe, i, o, outDir, radius = 15, threads = threadCount)
+            #profile_io(exe, i, o, outDir, threads = threadCount)
+
 def benchmark():
-    pearson_benchmark()
+    #pearson_benchmark()
+    blur_benchmark()
 
 
 make_pearson_outdirs()
