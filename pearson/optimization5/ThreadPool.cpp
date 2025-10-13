@@ -107,7 +107,8 @@ void* ThreadPool::peon(ThreadPool* pSelf)
             {
                 break;
             }
-            task = std::move(pSelf->m_TaskQ.front()); pSelf->m_TaskQ.pop();
+            task = std::move(pSelf->m_TaskQ.front());
+            pSelf->m_TaskQ.pop();
         }
         task();
     }
