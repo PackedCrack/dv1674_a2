@@ -6,8 +6,8 @@ CXXFLAGS=-std=c++17 -g -Wunused -Wall -Wunused
 
 all: blur_par blur
 
-blur_par: gaussian threadpool matrixopt ppmopt filtersopt optimization1/main.cpp 
-	$(CXX2) $(CXXFLAGS2) optimization2/main.cpp optimization2/filtersopt.o optimization2/matrixopt.o optimization2/ppmopt.o optimization2/ThreadPool.o optimization2/gaussian.o -o blur_par -pthread
+blur_par: gaussian threadpool optimization2/main.cpp 
+	$(CXX2) $(CXXFLAGS2) optimization2/main.cpp optimization2/ThreadPool.o optimization2/gaussian.o -o blur_par -pthread
 
 blur: matrix ppm filters blur.cpp
 	$(CXX) $(CXXFLAGS) blur.cpp matrix.o ppm.o filters.o -o blur
@@ -20,15 +20,6 @@ matrix: matrix.hpp matrix.cpp
 
 ppm: ppm.hpp ppm.cpp
 	$(CXX) $(CXXFLAGS) -c ppm.cpp -o ppm.o
-
-filtersopt: matrixopt optimization2/filters.hpp optimization2/filters.cpp
-	$(CXX2) $(CXXFLAGS2) -c optimization2/filters.cpp -o optimization2/filtersopt.o
-
-matrixopt: optimization2/matrix.hpp optimization2/matrix.cpp
-	$(CXX2) $(CXXFLAGS2) -c optimization2/matrix.cpp -o optimization2/matrixopt.o
-
-ppmopt: optimization1/ppm.hpp optimization2/ppm.cpp
-	$(CXX2) $(CXXFLAGS2) -c optimization2/ppm.cpp -o optimization2/ppmopt.o
 
 threadpool: optimization2/ThreadPool.hpp optimization2/ThreadPool.cpp
 	$(CXX2) $(CXXFLAGS2) -c optimization2/ThreadPool.cpp -o optimization2/ThreadPool.o

@@ -204,18 +204,23 @@ int main(int argc, char const** argv)
     gaussian::Image image = load(tp, argv[2]);
 
     std::int32_t radius = std::stoi(argv[1]);
-    gaussian::calculate(image, radius);
+    if (radius != 15)
+    {
+        std::printf("\nRadius must be 15 not %i", radius);
+        return 1;
+    }
+    gaussian::BlurredImage result = gaussian::add_blur(image, radius);
 
     return 0;
 
-    PPM::Reader reader {};
-    PPM::Writer writer {};
-
-    auto m { reader(argv[2]) };
-    auto radius { static_cast<unsigned>(std::stoul(argv[1])) };
-
-    auto blurred { Filter::blur(m, radius) };
-    writer(blurred, argv[3]);
-
-    return 0;
+    //PPM::Reader reader {};
+    //PPM::Writer writer {};
+//
+    //auto m { reader(argv[2]) };
+    //auto radius { static_cast<unsigned>(std::stoul(argv[1])) };
+//
+    //auto blurred { Filter::blur(m, radius) };
+    //writer(blurred, argv[3]);
+//
+    //return 0;
 }

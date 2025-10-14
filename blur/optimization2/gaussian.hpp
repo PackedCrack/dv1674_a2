@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <vector>
+#include "ThreadPool.hpp"
+
 
 namespace gaussian
 {
@@ -27,20 +29,21 @@ namespace gaussian
         {
             using other = aligned_allocator<U, aligned_as>;
         };
-        template<class allocated_t1, std::size_t alignment, class allocated_t2>
-        friend bool operator==(const aligned_allocator<allocated_t1, alignment>&, const aligned_allocator<allocated_t2, alignment>&)
-        {
-            return true;
-        }
-        template<class allocated_t1, std::size_t alignment, class allocated_t2>
-        friend bool operator!=(const aligned_allocator<allocated_t1, alignment>&, const aligned_allocator<allocated_t2, alignment>&)
-        {
-            return false;
-        }
     };
-    struct Image
+    template<class allocated_t1, std::size_t alignment, class allocated_t2>
+    constexpr bool operator==(const aligned_allocator<allocated_t1, alignment>&, const aligned_allocator<allocated_t2, alignment>&)
     {
-        using value_type = std::uint8_t;
+        return true;
+    }
+    template<class allocated_t1, std::size_t alignment, class allocated_t2>
+    constexpr bool operator!=(const aligned_allocator<allocated_t1, alignment>&, const aligned_allocator<allocated_t2, alignment>&)
+    {
+        return false;
+    }
+    template<typename derived_t, typename value_t>
+    struct ImageBase
+    {
+        using value_type = value_t;
 
         std::vector<value_type, aligned_allocator<value_type, 32>> red;
         std::vector<value_type, aligned_allocator<value_type, 32>> green;
@@ -49,5 +52,9 @@ namespace gaussian
         std::int32_t height;
         std::int32_t maxval;
     };
-    void calculate(Image& image, std::int32_t radius);
+    struct Image : public ImageBase<Image, std::uint8_t>
+    {};
+    struct BlurredImage : public ImageBase<BlurredImage, float>
+    {};
+    [[nodiscard]] BlurredImage add_blur(ThreadPool& tp, const Image& image, std::int32_t radius);
 }    // namespace gaussian
