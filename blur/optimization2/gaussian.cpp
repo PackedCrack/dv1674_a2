@@ -261,53 +261,107 @@ namespace
                     pDstRow));
         }
     }
-    void to_uint8(std::span<const float> src, std::span<uint8_t> dst)
+    [[nodiscard]] std::tuple<std::int64_t, bool> to_uint8_required_num_tasks(std::span<const float> src,
+                                                                            std::size_t numLanes,
+                                                                            std::size_t itersPerTask)
     {
-            // This has to be done because the original code just assigns float to uint8 mid calculations lmfao
-            assert(src.size() == dst.size());
+        std::size_t elements = src.size();
+        std::size_t simdIters = elements / numLanes;
+        std::size_t numSimdTasks = (simdIters + itersPerTask - 1) / itersPerTask;
+        bool hasTail = (elements % numLanes) != 0;
 
-            __m256 vmin = _mm256_set1_ps(0.0f);
-            __m256 vmax = _mm256_set1_ps(255.0f);
+        return { numSimdTasks, hasTail };
+    }
+    void to_uint8(ThreadPool& tp,
+                Latch& latch,
+                std::size_t numSimdTasks,
+                bool hasTail,
+                std::size_t iterationsPerTask,
+                std::span<const float> src,
+                std::span<uint8_t> dst)
+    {
+        // This has to be done because the original code just assign floats to uint8 mid calculations lmfao
+        assert(src.size() == dst.size());
+        static constexpr std::size_t numLanes = 8;
+        assert(src.size() > numLanes);
 
-            std::size_t n = src.size();
-            std::size_t i = 0;
-            while(i + 8 <= n)
+        __m256 min = _mm256_set1_ps(0.0f);
+        __m256 max = _mm256_set1_ps(255.0f);
+
+        auto make_to_uint8_simd_task = [](Latch& latch,
+                                            std::span<const float> src,
+                                            std::span<uint8_t> dst,
+                                            std::size_t currentIteration,
+                                            std::size_t nextIteration,
+                                            __m256 min,
+                                            __m256 max)
+        {
+            return [&latch, src, dst, currentIteration, nextIteration, max, min]()
             {
-                __m256 v = _mm256_loadu_ps(std::addressof(src[i]));
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_max_ps&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360
-                v = _mm256_max_ps(vmin, _mm256_min_ps(v, vmax));
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvttps_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414
-                __m256i i32 = _mm256_cvttps_epi32(v);               // truncate
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_castsi256_si128&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690
-                __m128i low = _mm256_castsi256_si128(i32);
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_extractf128_si256&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939
-                __m128i high = _mm256_extractf128_si256(i32, 1);
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880
-                __m128i u16 = _mm_packus_epi32(low, high);             // 8x uint16
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi16&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880,4871
-                __m128i u8  = _mm_packus_epi16(u16, u16);           // 16x uint8, use low 8
-                _mm_storel_epi64(reinterpret_cast<__m128i*>(std::addressof(dst[i])), u8);
-
-                i += 8;
-            }
-
-            while(i < n)
-            {
-                float v = src[i];
-                if (v < 0.f)
+                std::size_t i = currentIteration * numLanes;
+                std::size_t end = nextIteration * numLanes;
+                while(i + numLanes <= end)
                 {
-                    v = 0.f;
-                }
-                else if (v > 255.f)
-                {
-                    v = 255.f;
-                }
-                dst[i] = static_cast<uint8_t>(static_cast<int>(v));  // trunc
+                    __m256 v = _mm256_loadu_ps(std::addressof(src[i]));
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_max_ps&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360
+                    v = _mm256_max_ps(min, _mm256_min_ps(v, max));
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvttps_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414
+                    __m256i i32 = _mm256_cvttps_epi32(v);               // truncate
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_castsi256_si128&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690
+                    __m128i low = _mm256_castsi256_si128(i32);
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_extractf128_si256&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939
+                    __m128i high = _mm256_extractf128_si256(i32, 1);
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880
+                    __m128i u16 = _mm_packus_epi32(low, high);             // 8x uint16
+                    // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi16&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880,4871
+                    __m128i u8  = _mm_packus_epi16(u16, u16);           // 16x uint8, use low 8
+                    _mm_storel_epi64(reinterpret_cast<__m128i*>(std::addressof(dst[i])), u8);
 
-                ++i;
-            }
+                    i += numLanes;
+                }
+
+                latch.count_down();
+            };
+        };
+
+        std::size_t simdIters = src.size() / numLanes;
+        for (std::size_t i = 0; i < numSimdTasks; ++i)
+        {
+            std::size_t currentIteration = i * iterationsPerTask;
+            std::size_t nextIteration = std::min(currentIteration + iterationsPerTask, simdIters);
+            tp.add_task(make_to_uint8_simd_task(latch, src, dst, currentIteration, nextIteration, min, max));
         }
 
+        if (hasTail)
+        {
+            std::size_t tailStart = simdIters * numLanes;
+            auto make_to_uint8_tail_task = [](Latch& latch, std::size_t tailStart, std::span<const float> src, std::span<uint8_t> dst)
+            {
+                return [&latch, tailStart, src, dst]()
+                {
+                    std::size_t i = tailStart;
+                    while(i < src.size())
+                    {
+                        float v = src[i];
+                        if (v < 0.f)
+                        {
+                            v = 0.f;
+                        }
+                        else if (v > 255.f)
+                        {
+                            v = 255.f;
+                        }
+                        dst[i] = static_cast<uint8_t>(static_cast<std::int32_t>(v));  // trunc
+
+                        ++i;
+                    }
+                    latch.count_down();
+                };
+            };
+
+            tp.add_task(make_to_uint8_tail_task(latch, tailStart, src, dst));
+        }
+    }
     void calculate_column_middle_tail(const std::uint8_t* pSrcCol,
                                         float* pDstCol,
                                         const Weights& weights,
@@ -441,6 +495,39 @@ namespace
             calculate_column_border(pSrcCol, stride, pDstCol, weights, centerWeight, radius, height, y);
         }
     }
+    [[nodiscard]] auto make_vertical_pass_task(Latch& latch,
+                                            const Weights& weights,
+                                            float weightSum,
+                                            float centerWeight,
+                                            __m256 centerWeightAvx,
+                                            __m256 normalizationFactor,
+                                            std::int32_t radius,
+                                            std::int32_t width,
+                                            std::int32_t height,
+                                            const std::uint8_t* pSrcCol,
+                                            float* pDstCol)
+    {
+        return [&latch, &weights, weightSum, centerWeight, centerWeightAvx, normalizationFactor, radius, width, height, pSrcCol, pDstCol]()
+        {
+            calculate_bottom_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
+
+            calculate_column_middle(
+                pSrcCol,
+                pDstCol,
+                weights,
+                centerWeight,
+                weightSum,
+                radius,
+                height,
+                width,
+                normalizationFactor,
+                centerWeightAvx);
+
+            calculate_top_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
+
+            latch.count_down();
+        };
+    }
     void vertical_pass(ThreadPool& tp,
                         Latch& latch,
                         const Weights& weights,
@@ -460,11 +547,19 @@ namespace
             const std::uint8_t* pSrcCol = std::addressof(src[x]);
             float* pDstCol = std::addressof(dst[x]);
 
-            calculate_bottom_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
-
-            calculate_column_middle(pSrcCol, pDstCol, weights, centerWeight, weightSum, radius, height, width, normalizationFactor, centerWeightAvx);
-
-            calculate_top_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
+            tp.add_task(
+                make_vertical_pass_task(
+                    latch,
+                    weights,
+                    weightSum,
+                    centerWeight,
+                    centerWeightAvx,
+                    normalizationFactor,
+                    radius,
+                    width,
+                    height,
+                    pSrcCol,
+                    pDstCol));
         }
     }
 }   // namespace
@@ -472,31 +567,63 @@ namespace gaussian
 {
     Image& add_blur(ThreadPool& tp, Image& image, std::int32_t radius)
     {
+        assert(image.red.size() == image.green.size());
+        assert(image.green.size() == image.blue.size());
+
         Weights w = calculate_weights(radius);
         float weightSum = calc_weight_sum(w, radius);
 
         ScratchImage scratch = make_scratch_image(image);
 
         // Horizontal pass per color channel
-        std::int64_t numTasks = image.height * 3; // One task for each row for each color channel
-        Latch latch{ numTasks };
-        horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
-        horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
-        horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
-        latch.wait();
+        {
+            std::int64_t numTasks = image.height * 3; // One task for each row for each color channel
+            Latch latch{ numTasks };
+            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
+            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
+            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
 
-        to_uint8(scratch.red, image.red);
-        to_uint8(scratch.green, image.green);
-        to_uint8(scratch.blue, image.blue);
+            latch.wait();
+        }
+
+
+        // number of SIMD lanes used by to_uint8
+        static constexpr std::size_t numLanes = 8;
+        static constexpr std::size_t iterationsPerTask = 64;
+        auto[simdTasks, hasTail] = to_uint8_required_num_tasks(scratch.red, numLanes, iterationsPerTask);
+        std::int64_t uint8Tasks = simdTasks * 3;
+        if (hasTail)
+        {
+            uint8Tasks += 3;
+        }
+
+        {
+            Latch latch{ uint8Tasks };
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.red, image.red);
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.green, image.green);
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.blue, image.blue);
+            latch.wait();
+        }
+
 
         // Vertical pass per color channel
-        vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
-        vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
-        vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
+        {
+            std::int64_t numTasks = image.width * 3; // One task for each row for each color channel
+            Latch latch{ numTasks };
+            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
+            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
+            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
 
-        to_uint8(scratch.red, image.red);
-        to_uint8(scratch.green, image.green);
-        to_uint8(scratch.blue, image.blue);
+            latch.wait();
+        }
+
+        {
+            Latch latch{ uint8Tasks };
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.red, image.red);
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.green, image.green);
+            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.blue, image.blue);
+            latch.wait();
+        }
 
         return image;
     }
