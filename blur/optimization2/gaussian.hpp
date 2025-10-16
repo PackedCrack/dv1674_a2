@@ -54,7 +54,7 @@ namespace gaussian
     };
     struct Image : public ImageBase<Image, std::uint8_t>
     {};
-    struct BlurredImage : public ImageBase<BlurredImage, float>
+    struct ScratchImage : public ImageBase<ScratchImage, float>
     {};
-    [[nodiscard]] BlurredImage add_blur(ThreadPool& tp, const Image& image, std::int32_t radius);
+    [[nodiscard]] Image& add_blur(ThreadPool& tp, Image& image, std::int32_t radius);
 }    // namespace gaussian

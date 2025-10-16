@@ -1,22 +1,23 @@
-
-
-#include "matrix.hpp"
-#include "ppm.hpp"
-#include "filters.hpp"
 #include "ThreadPool.hpp"
 #include "gaussian.hpp"
 
-#include <cstdlib>
+#include <string>
+#include <cstdio>
 #include <charconv>
 #include <cassert>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fstream>
 
 
 namespace
 {
+    // hack because i'm to lazy to write output logic for the PPM header.
+    std::string s_PpmHeader{};
+    //
+    //
     class File
     {
     public:
@@ -183,6 +184,9 @@ namespace
         pFileContent = extract_maxval(pFileContent, std::addressof(image.maxval));
         assert(image.maxval == 255);
 
+        std::uintptr_t size = pFileContent - f.begin();
+        s_PpmHeader = std::string{ f.begin(), size };
+
         image.red.resize(image.width * image.height);
         image.blue.resize(image.width * image.height);
         image.green.resize(image.width * image.height);
@@ -209,8 +213,29 @@ int main(int argc, char const** argv)
         std::printf("\nRadius must be 15 not %i", radius);
         return 1;
     }
-    gaussian::BlurredImage result = gaussian::add_blur(image, radius);
 
+    //gaussian::BlurredImage result = gaussian::add_blur(tp, image, radius);
+
+    image = gaussian::add_blur(tp, image, radius);
+
+    std::fstream output{ argv[3], std::ios::out | std::ios::binary | std::ios::trunc };
+    assert(output.is_open());
+
+    output.write(s_PpmHeader.data(), s_PpmHeader.size());
+    for (std::size_t i = 0; i < image.red.size(); ++i)
+    {
+        output.write(reinterpret_cast<const char*>(&image.red[i]), sizeof(std::uint8_t));
+        output.write(reinterpret_cast<const char*>(&image.green[i]), sizeof(std::uint8_t));
+        output.write(reinterpret_cast<const char*>(&image.blue[i]), sizeof(std::uint8_t));
+    }
+
+
+
+
+    //if (result.red[0] == 0)
+    //{
+    //    std::printf("\nBlur failed");
+    //}
     return 0;
 
     //PPM::Reader reader {};
