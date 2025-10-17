@@ -2,10 +2,12 @@
 Author: David Holmqvist <daae19@student.bth.se>
 */
 
+#include <array>
 #include "filters.hpp"
 #include "matrix.hpp"
 #include "ppm.hpp"
 #include <cmath>
+#include <cstdint>
 
 namespace Filter
 {
@@ -67,6 +69,25 @@ namespace Filter
             }
         }
 
+        uint8_t* pR = (uint8_t*)scratch.R;
+        uint8_t* pG = (uint8_t*)scratch.G;
+        uint8_t* pB = (uint8_t*)scratch.B;
+        std::array<uint8_t, 105> test2{};
+        for (auto i = 0; i < test2.size(); ++i)
+        {
+            test2[i] = static_cast<uint8_t>(pR[i]);
+        }
+        std::array<uint8_t, 105> test3{};
+        for (auto i = 0; i < test3.size(); ++i)
+        {
+            test3[i] = static_cast<uint8_t>(pG[i]);
+        }
+        std::array<uint8_t, 105> test4{};
+        for (auto i = 0; i < test4.size(); ++i)
+        {
+            test4[i] = static_cast<uint8_t>(pB[i]);
+        }
+
         for (auto x{0}; x < dst.get_x_size(); x++)
         {
             for (auto y{0}; y < dst.get_y_size(); y++)
@@ -100,6 +121,12 @@ namespace Filter
                 dst.g(x, y) = g / n;
                 dst.b(x, y) = b / n;
             }
+        }
+
+        std::array<uint8_t, 20> test{};
+        for (auto i = 0; i < test.size(); ++i)
+        {
+            test[i] = static_cast<uint8_t>(dst.R[i]);
         }
 
         return dst;

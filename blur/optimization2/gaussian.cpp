@@ -7,11 +7,11 @@
 #include <span>
 
 
-
 namespace
 {
     constexpr std::size_t MAX_RADIUS = 15;
     using Weights = std::array<float, MAX_RADIUS + 1>;
+    using VectorWeights = std::array<__m256, MAX_RADIUS + 1>;
     [[nodiscard]] Weights calculate_weights(std::int32_t radius)
     {
         static constexpr float MAX_X = 1.333f; // Why?
@@ -50,24 +50,30 @@ namespace
 
         return scratch;
     }
-    [[nodsicard]] __m256 cast_uint8_to_ps(const uint8_t* pValue)
+    [[nodiscard]] std::int64_t required_block_tasks(std::int32_t total,
+                                                    std::int32_t block)
+    {
+        return (static_cast<std::int64_t>(total) + block - 1) / block;
+    }
+    [[nodiscard]] __m256 cast_uint8_to_ps(const uint8_t* pValue)
     {
         // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_loadl_epi64&ig_expand=4044
-        __m128i lo8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(pValue));        // This might be UB.. I dunno.
+        __m128i b8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(pValue));        // 8x uint8
         // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvtepu8_epi32&ig_expand=4044,1866
-        __m256i i32 = _mm256_cvtepu8_epi32(lo8);                                        // 8x uint8 to 8x int32
+        __m128i u16 = _mm_cvtepu8_epi16(b8);                                            // 8x uint8 to 8x int32
+        // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvtepu16_epi32&ig_expand=1854,1771
+        __m256i i32 = _mm256_cvtepu16_epi32(u16);
         // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvtepi32_ps&ig_expand=4044,1866,1664
         return _mm256_cvtepi32_ps(i32);                                                 // 8x int32 to 8x float32
     }
-    void calculate_middle_tail(
-        const std::uint8_t* pSrcRow,
-        float* pDstRow,
-        const Weights& weights,
-        float centerWeight,
-        float weightSum,
-        std::int32_t radius,
-        std::int32_t x,
-        std::int32_t middleEndExclusive)
+    void calculate_middle_tail(const std::uint8_t* pSrcRow,
+                                float* pDstRow,
+                                const Weights& weights,
+                                float centerWeight,
+                                float weightSum,
+                                std::int32_t radius,
+                                std::int32_t x,
+                                std::int32_t middleEndExclusive)
     {
         while(x < middleEndExclusive)
         {
@@ -82,64 +88,67 @@ namespace
             ++x;
         }
     }
-    void calculate_middle(
-        const std::uint8_t* pSrcRow,
-        float* pDstRow,
-        const Weights& weights,
-        float centerWeight,
-        float weightSum,
-        std::int32_t radius,
-        std::int32_t width,
-        __m256 normalizationFactor,
-        __m256 centerWeightAvx
-        )
+    void calculate_middle(const std::uint8_t* pSrcRow,
+                          float* pDstRow,
+                          const Weights& weights,
+                          float centerWeight,
+                          float weightSum,
+                          std::int32_t radius,
+                          std::int32_t width,
+                          __m256 normalizationFactor,
+                          const std::array<__m256, MAX_RADIUS + 1>& vWeights)
     {
         assert(width > radius);
+        __m256 vCenterWeight = vWeights.front();
         std::int32_t middleEndExclusive = width - radius;
         std::int32_t x = radius;
-        static constexpr std::int32_t numLanes = 8;
+        static constexpr std::int32_t numLanes = 16;
         std::int32_t simdEnd = middleEndExclusive - numLanes;
         while(x <= simdEnd)
         {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps&ig_expand=4044,1866,1664,4687
-            __m256 result = _mm256_mul_ps(centerWeightAvx, cast_uint8_to_ps(pSrcRow + x));
+            __m256 result1 = _mm256_mul_ps(vCenterWeight, cast_uint8_to_ps(pSrcRow + x + 0));
+            __m256 result2 = _mm256_mul_ps(vCenterWeight, cast_uint8_to_ps(pSrcRow + x + 8));
             for (std::int32_t i = 1; i <= radius; ++i)
             {
-                __m256 weight = _mm256_set1_ps(weights[i]);
-                __m256 left = cast_uint8_to_ps(pSrcRow + x - i);
-                __m256 right = cast_uint8_to_ps(pSrcRow + x + i);
+                __m256 left1 = cast_uint8_to_ps(pSrcRow + x - i + 0);
+                __m256 right1 = cast_uint8_to_ps(pSrcRow + x + i + 0);
+                __m256 left2 = cast_uint8_to_ps(pSrcRow + x - i + 8);
+                __m256 right2 = cast_uint8_to_ps(pSrcRow + x + i + 8);
 #ifdef __FMA__
                 // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_fmadd_ps&ig_expand=4044,1866,1664,4687,3107
-                result = _mm256_fmadd_ps(left, weight, result);
-                result = _mm256_fmadd_ps(right, weight, result);
+                result1 = _mm256_fmadd_ps(_mm256_add_ps(left1, right1), vWeights[i], result1);
+                result2 = _mm256_fmadd_ps(_mm256_add_ps(left2, right2), vWeights[i], result2);
 #else
-                result = _mm256_add_ps(_mm256_mul_ps(left, vw[i]), result);
-                result = _mm256_add_ps(_mm256_mul_ps(right, vw[i]), result);
+                result1 = _mm256_add_ps(result1, _mm256_mul_ps(_mm256_add_ps(left1, right1), vWeights[i]));
+                result2 = _mm256_add_ps(result2, _mm256_mul_ps(_mm256_add_ps(left2, right2), vWeights[i]));
 #endif
             }
 #ifdef __FMA__
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps&ig_expand=4044,1866,1664,4687,3107,4687
-            result = _mm256_mul_ps(result, normalizationFactor);
+            result1 = _mm256_mul_ps(result1, normalizationFactor);
+            result2 = _mm256_mul_ps(result2, normalizationFactor);
 #else
             __m256 denominator = _mm256_set1_ps(weightSum);
-            result = _mm256_div_ps(result, denominator);
+            result1 = _mm256_div_ps(result1, denominator);
+            result2 = _mm256_div_ps(result2, denominator);
 #endif
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_storeu_ps&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543
-            _mm256_storeu_ps(pDstRow + x, result);
+            _mm256_storeu_ps(pDstRow + x + 0, result1);
+            _mm256_storeu_ps(pDstRow + x + 8, result2);
 
             x += numLanes;
         }
 
         calculate_middle_tail(pSrcRow, pDstRow, weights, centerWeight, weightSum, radius, x, middleEndExclusive);
     }
-    void calculate_row_border(
-        const std::uint8_t* pSrcRow,
-        std::int32_t srcIndex,
-        float* pDstRow,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t rightEnd)
+    void calculate_row_border(const std::uint8_t* pSrcRow,
+                                std::int32_t srcIndex,
+                                float* pDstRow,
+                                const Weights& weights,
+                                float centerWeight,
+                                std::int32_t radius,
+                                std::int32_t rightEnd)
     {
         float result = centerWeight * static_cast<float>(pSrcRow[srcIndex]);
         float sumW = centerWeight;
@@ -160,13 +169,12 @@ namespace
         }
         pDstRow[srcIndex] = result / sumW;
     }
-    void calculate_left_border(
-        const std::uint8_t* pSrcRow,
-        float* pDstRow,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t rightEnd)
+    void calculate_left_border(const std::uint8_t* pSrcRow,
+                                float* pDstRow,
+                                const Weights& weights,
+                                float centerWeight,
+                                std::int32_t radius,
+                                std::int32_t rightEnd)
     {
         assert(radius < rightEnd);
         for (std::int32_t x = 0; x < radius; ++x)
@@ -174,13 +182,12 @@ namespace
             calculate_row_border(pSrcRow, x, pDstRow, weights, centerWeight, radius, rightEnd);
         }
     }
-    void calculate_right_border(
-        const std::uint8_t* pSrcRow,
-        float* pDstRow,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t rightEnd)
+    void calculate_right_border(const std::uint8_t* pSrcRow,
+                                float* pDstRow,
+                                const Weights& weights,
+                                float centerWeight,
+                                std::int32_t radius,
+                                std::int32_t rightEnd)
     {
         assert(radius < rightEnd);
         std::int32_t xStart = std::max(0, rightEnd - radius);
@@ -189,40 +196,51 @@ namespace
             calculate_row_border(pSrcRow, x, pDstRow, weights, centerWeight, radius, rightEnd);
         }
     }
-[[nodiscard]] auto make_horizontal_pass_task(
-    Latch& latch,
-    const Weights& weights,
-    float weightSum,
-    float centerWeight,
-    __m256 centerWeightAvx,
-    __m256 normalizationFactor,
-    std::int32_t radius,
-    std::int32_t width,
-    const std::uint8_t* pSrcRow,
-    float* pDstRow)
+[[nodiscard]] auto make_horizontal_pass_task(Latch& latch,
+                                            const VectorWeights& vWeights,
+                                            const Weights& weights,
+                                            float weightSum,
+                                            std::int32_t radius,
+                                            std::int32_t width,
+                                            std::span<const std::uint8_t> src,
+                                            std::span<float> dst,
+                                            std::size_t startRow,
+                                            std::size_t endRow)
     {
-        return [&latch, &weights, weightSum, centerWeight, centerWeightAvx, normalizationFactor, radius,  width, pSrcRow, pDstRow]()
+        return [=, &latch]()
         {
-            calculate_left_border(pSrcRow, pDstRow, weights, centerWeight, radius, width);
+            __m256 normalizationFactor = _mm256_set1_ps(1.0f / weightSum);
+            float centerWeight = weights[0];
+            std::int32_t stride = width;
 
-            calculate_middle(
-                pSrcRow,
-                pDstRow,
-                weights,
-                centerWeight,
-                weightSum,
-                radius,
-                width,
-                normalizationFactor,
-                centerWeightAvx);
+            for (std::size_t row = startRow; row < endRow; ++row )
+            {
+                std::size_t index = row * stride;
+                const std::uint8_t* pSrcRow = std::addressof(src[index]);
+                float* pDstRow = std::addressof(dst[index]);
 
-            calculate_right_border(pSrcRow, pDstRow, weights, centerWeight, radius, width);
+                calculate_left_border(pSrcRow, pDstRow, weights, centerWeight, radius, width);
+
+                calculate_middle(
+                    pSrcRow,
+                    pDstRow,
+                    weights,
+                    centerWeight,
+                    weightSum,
+                    radius,
+                    width,
+                    normalizationFactor,
+                    vWeights);
+
+                calculate_right_border(pSrcRow, pDstRow, weights, centerWeight, radius, width);
+            }
 
             latch.count_down();
         };
     }
     void horizontal_pass(ThreadPool& tp,
                         Latch& latch,
+                        const VectorWeights vWeights,
                         const Weights& weights,
                         float weightSum,
                         std::int32_t radius,
@@ -233,398 +251,331 @@ namespace
     {
         assert(weights.size() == radius + 1);
 
-        std::int32_t srcStride = width;
-        std::int32_t dstStride = width;
-
-        __m256 normalizationFactor = _mm256_set1_ps(1.0f / weightSum);
-        float centerWeight = weights.front();
-        __m256 centerWeightAvx = _mm256_set1_ps(centerWeight);
-
-        for (std::size_t y = 0; y < static_cast<std::size_t>(height); ++y)
+        static constexpr int rowsPerTask = 64;  // should take this as parameter but whatever i wont tweak it..
+        for (std::size_t y = 0; y < static_cast<std::size_t>(height); y += rowsPerTask)
         {
-            std::size_t sourceIndex = y * srcStride;
-            const std::uint8_t* pSrcRow = std::addressof(src[sourceIndex]);
-            std::size_t dstIndex = y * dstStride;
-            float* pDstRow = std::addressof(dst[dstIndex]);
-
+            std::size_t startRow = y;
+            std::size_t endRow = std::min(static_cast<std::size_t>(height), startRow + rowsPerTask);
             tp.add_task(
                 make_horizontal_pass_task(
                     latch,
+                    vWeights,
                     weights,
                     weightSum,
-                    centerWeight,
-                    centerWeightAvx,
-                    normalizationFactor,
                     radius,
                     width,
-                    pSrcRow,
-                    pDstRow));
+                    src,
+                    dst,
+                    startRow,
+                    endRow));
         }
     }
-    [[nodiscard]] std::tuple<std::int64_t, bool> to_uint8_required_num_tasks(std::span<const float> src,
-                                                                            std::size_t numLanes,
-                                                                            std::size_t itersPerTask)
-    {
-        std::size_t elements = src.size();
-        std::size_t simdIters = elements / numLanes;
-        std::size_t numSimdTasks = (simdIters + itersPerTask - 1) / itersPerTask;
-        bool hasTail = (elements % numLanes) != 0;
-
-        return { numSimdTasks, hasTail };
-    }
-    void to_uint8(ThreadPool& tp,
-                Latch& latch,
-                std::size_t numSimdTasks,
-                bool hasTail,
-                std::size_t iterationsPerTask,
-                std::span<const float> src,
-                std::span<uint8_t> dst)
+    void to_uint8(ThreadPool& tp, std::span<const float> src, std::span<uint8_t> dst)
     {
         // This has to be done because the original code just assign floats to uint8 mid calculations lmfao
         assert(src.size() == dst.size());
         static constexpr std::size_t numLanes = 8;
         assert(src.size() > numLanes);
 
-        __m256 min = _mm256_set1_ps(0.0f);
-        __m256 max = _mm256_set1_ps(255.0f);
+        auto numTasks = static_cast<std::int64_t>(tp.thread_count());
+        std::int64_t taskSize = (static_cast<std::int64_t>(src.size()) + numTasks - 1) / numTasks;
 
-        auto make_to_uint8_simd_task = [](Latch& latch,
-                                            std::span<const float> src,
-                                            std::span<uint8_t> dst,
-                                            std::size_t currentIteration,
-                                            std::size_t nextIteration,
-                                            __m256 min,
-                                            __m256 max)
+        Latch latch{ numTasks };
+        for (std::int64_t task = 0; task < numTasks; ++task)
         {
-            return [&latch, src, dst, currentIteration, nextIteration, max, min]()
+            std::int64_t start = task * taskSize;
+            std::int64_t end = std::min(static_cast<std::int64_t>(src.size()), start + taskSize);
+
+            tp.add_task([&latch, src, dst, start, end]()
             {
-                std::size_t i = currentIteration * numLanes;
-                std::size_t end = nextIteration * numLanes;
+                __m256 min = _mm256_set1_ps(0.0f);
+                __m256 max = _mm256_set1_ps(255.0f);
+
+                static constexpr std::int64_t numLanes = 8;
+                std::int64_t i = start;
                 while(i + numLanes <= end)
                 {
                     __m256 v = _mm256_loadu_ps(std::addressof(src[i]));
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_max_ps&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360
                     v = _mm256_max_ps(min, _mm256_min_ps(v, max));
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_cvttps_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414
-                    __m256i i32 = _mm256_cvttps_epi32(v);               // truncate
+                    __m256i i32 = _mm256_cvttps_epi32(v);
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_castsi256_si128&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690
-                    __m128i low = _mm256_castsi256_si128(i32);
+                    __m128i lo = _mm256_castsi256_si128(i32);
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_extractf128_si256&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939
-                    __m128i high = _mm256_extractf128_si256(i32, 1);
+                    __m128i hi = _mm256_extractf128_si256(i32, 1);
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi32&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880
-                    __m128i u16 = _mm_packus_epi32(low, high);             // 8x uint16
+                    __m128i u16 = _mm_packus_epi32(lo, hi);
                     // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_packus_epi16&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543,4360,2414,690,2939,4880,4871
-                    __m128i u8  = _mm_packus_epi16(u16, u16);           // 16x uint8, use low 8
+                    __m128i u8  = _mm_packus_epi16(u16, u16);
                     _mm_storel_epi64(reinterpret_cast<__m128i*>(std::addressof(dst[i])), u8);
 
                     i += numLanes;
                 }
 
-                latch.count_down();
-            };
-        };
-
-        std::size_t simdIters = src.size() / numLanes;
-        for (std::size_t i = 0; i < numSimdTasks; ++i)
-        {
-            std::size_t currentIteration = i * iterationsPerTask;
-            std::size_t nextIteration = std::min(currentIteration + iterationsPerTask, simdIters);
-            tp.add_task(make_to_uint8_simd_task(latch, src, dst, currentIteration, nextIteration, min, max));
-        }
-
-        if (hasTail)
-        {
-            std::size_t tailStart = simdIters * numLanes;
-            auto make_to_uint8_tail_task = [](Latch& latch, std::size_t tailStart, std::span<const float> src, std::span<uint8_t> dst)
-            {
-                return [&latch, tailStart, src, dst]()
+                while(i < end)
                 {
-                    std::size_t i = tailStart;
-                    while(i < src.size())
-                    {
-                        float v = src[i];
-                        if (v < 0.f)
-                        {
-                            v = 0.f;
-                        }
-                        else if (v > 255.f)
-                        {
-                            v = 255.f;
-                        }
-                        dst[i] = static_cast<uint8_t>(static_cast<std::int32_t>(v));  // trunc
+                    dst[i] = static_cast<uint8_t>(src[i]);
+                    ++i;
+                }
 
-                        ++i;
-                    }
+                latch.count_down();
+            });
+        }
+
+        latch.wait();
+    }
+    void transpose8x8(const float* pSrc,
+                      std::int32_t srcStride,
+                      float* pDst,
+                      std::int32_t dstStride)
+    {
+        // https://stackoverflow.com/questions/25622745/transpose-an-8x8-float-using-avx-avx2
+        __m256 r0 = _mm256_loadu_ps(pSrc + 0 * srcStride);
+        __m256 r1 = _mm256_loadu_ps(pSrc + 1 * srcStride);
+        __m256 r2 = _mm256_loadu_ps(pSrc + 2 * srcStride);
+        __m256 r3 = _mm256_loadu_ps(pSrc + 3 * srcStride);
+        __m256 r4 = _mm256_loadu_ps(pSrc + 4 * srcStride);
+        __m256 r5 = _mm256_loadu_ps(pSrc + 5 * srcStride);
+        __m256 r6 = _mm256_loadu_ps(pSrc + 6 * srcStride);
+        __m256 r7 = _mm256_loadu_ps(pSrc + 7 * srcStride);
+
+        __m256 t0 = _mm256_unpacklo_ps(r0, r1);
+        __m256 t1 = _mm256_unpackhi_ps(r0, r1);
+        __m256 t2 = _mm256_unpacklo_ps(r2, r3);
+        __m256 t3 = _mm256_unpackhi_ps(r2, r3);
+        __m256 t4 = _mm256_unpacklo_ps(r4, r5);
+        __m256 t5 = _mm256_unpackhi_ps(r4, r5);
+        __m256 t6 = _mm256_unpacklo_ps(r6, r7);
+        __m256 t7 = _mm256_unpackhi_ps(r6, r7);
+
+        __m256 u0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1,0,1,0));
+        __m256 u1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3,2,3,2));
+        __m256 u2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1,0,1,0));
+        __m256 u3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3,2,3,2));
+        __m256 u4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1,0,1,0));
+        __m256 u5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3,2,3,2));
+        __m256 u6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1,0,1,0));
+        __m256 u7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3,2,3,2));
+
+        __m256 v0 = _mm256_permute2f128_ps(u0, u4, 0x20);
+        __m256 v1 = _mm256_permute2f128_ps(u1, u5, 0x20);
+        __m256 v2 = _mm256_permute2f128_ps(u2, u6, 0x20);
+        __m256 v3 = _mm256_permute2f128_ps(u3, u7, 0x20);
+        __m256 v4 = _mm256_permute2f128_ps(u0, u4, 0x31);
+        __m256 v5 = _mm256_permute2f128_ps(u1, u5, 0x31);
+        __m256 v6 = _mm256_permute2f128_ps(u2, u6, 0x31);
+        __m256 v7 = _mm256_permute2f128_ps(u3, u7, 0x31);
+
+        _mm256_storeu_ps(pDst + 0 * dstStride, v0);
+        _mm256_storeu_ps(pDst + 1 * dstStride, v1);
+        _mm256_storeu_ps(pDst + 2 * dstStride, v2);
+        _mm256_storeu_ps(pDst + 3 * dstStride, v3);
+        _mm256_storeu_ps(pDst + 4 * dstStride, v4);
+        _mm256_storeu_ps(pDst + 5 * dstStride, v5);
+        _mm256_storeu_ps(pDst + 6 * dstStride, v6);
+        _mm256_storeu_ps(pDst + 7 * dstStride, v7);
+    }
+    void transpose_block_scalar(std::span<const float> src,
+                                    std::int32_t srcStride,
+                                    std::span<float> dst,
+                                    std::int32_t dstStride,
+                                    std::int32_t column,
+                                    std::int32_t row,
+                                    std::int32_t columnEnd,
+                                    std::int32_t rowEnd)
+    {
+        for (std::int32_t y = row; y < rowEnd; ++y)
+        {
+            std::int32_t srcOffset = y * srcStride;
+            const float* pSrc = std::addressof(src[srcOffset + column]);
+            std::int32_t dstOffset = column * dstStride;
+            float* pDst = std::addressof(dst[dstOffset + y]);
+            for (std::int32_t x = column; x < columnEnd; ++x)
+            {
+                *pDst = *pSrc;
+                ++pSrc;
+                pDst += dstStride;
+            }
+        }
+    }
+    void transpose_block(std::span<const float> src,
+                        std::int32_t srcStride,
+                        std::span<float> dst,
+                        std::int32_t dstStride,
+                        std::int32_t columnStart,
+                        std::int32_t rowStart,
+                        std::int32_t columnEnd,
+                        std::int32_t rowEnd)
+    {
+        std::int32_t row = rowStart;
+        while(row + 8 <= rowEnd)
+        {
+            std::int32_t column = columnStart;
+            while(column + 8 <= columnEnd)
+            {
+                std::int32_t srcOffset = row * srcStride;
+                std::int32_t dstOffset = column * dstStride;
+
+                const float* pSrc = std::addressof(src[srcOffset + column]);
+                float* pDst = std::addressof(dst[dstOffset + row]);
+                transpose8x8(pSrc, srcStride, pDst, dstStride);
+
+                column += 8;
+            }
+
+            if (column < columnEnd)
+            {
+                // Right edge
+                transpose_block_scalar(src, srcStride, dst, dstStride, column, row, columnEnd, row + 8);
+            }
+
+            row += 8;
+        }
+        if (row < rowEnd)
+        {
+            // Bottom edge
+            transpose_block_scalar(src, srcStride, dst, dstStride, columnStart, row, columnEnd, rowEnd);
+        }
+    }
+    void transpose(ThreadPool& pool,
+                    Latch& latch,
+                    std::span<const float> src,
+                    std::int32_t srcStride,
+                    std::span<float> dst,
+                    std::int32_t dstStride,
+                    std::int32_t width,
+                    std::int32_t height,
+                    std::int32_t blockSize)
+    {
+        std::int32_t tasks = 0;
+        for (std::int32_t rowStart = 0; rowStart < height; rowStart += blockSize)
+        {
+            std::int32_t rowEnd = std::min(rowStart + blockSize, height);
+            for (std::int32_t columnStart = 0; columnStart < width; columnStart += blockSize)
+            {
+                std::int32_t columnEnd = std::min(columnStart + blockSize, width);
+                pool.add_task([=, &latch]()
+                {
+                    transpose_block(src, srcStride, dst, dstStride, columnStart, rowStart, columnEnd, rowEnd);
                     latch.count_down();
-                };
-            };
-
-            tp.add_task(make_to_uint8_tail_task(latch, tailStart, src, dst));
-        }
-    }
-    void calculate_column_middle_tail(const std::uint8_t* pSrcCol,
-                                        float* pDstCol,
-                                        const Weights& weights,
-                                        float centerWeight,
-                                        float weightSum,
-                                        std::int32_t radius,
-                                        std::int32_t column,
-                                        std::int32_t middleEndExclusive,
-                                        std::int32_t stride)
-    {
-        while (column < middleEndExclusive)
-        {
-            float result = centerWeight * static_cast<float>(pSrcCol[column * stride]);
-            for (std::int32_t i = 1; i <= radius; ++i) {
-                float w = weights[i];
-                result += w * static_cast<float>(pSrcCol[(column - i) * stride])
-                        + w * static_cast<float>(pSrcCol[(column + i) * stride]);
-            }
-            pDstCol[column * stride] = result / weightSum;
-            ++column;
-        }
-    }
-    void calculate_column_middle(
-        const std::uint8_t* pSrcCol,
-        float* pDstCol,
-        const Weights& weights,
-        float centerWeight,
-        float weightSum,
-        std::int32_t radius,
-        std::int32_t height,
-        std::int32_t stride,
-        __m256 normalizationFactor,
-        __m256 centerWeightAvx
-        )
-    {
-        assert(height > radius);
-        std::int32_t middleEndExclusive = height - radius;
-        std::int32_t column = radius;
-        static constexpr std::int32_t numLanes = 8;
-        std::int32_t simdEnd = middleEndExclusive - numLanes;
-        while(column <= simdEnd)
-        {
-            // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps&ig_expand=4044,1866,1664,4687
-            __m256 result = _mm256_mul_ps(centerWeightAvx, cast_uint8_to_ps(pSrcCol + column));
-            for (std::int32_t i = 1; i <= radius; ++i)
-            {
-                __m256 weight = _mm256_set1_ps(weights[i]);
-                __m256 top = cast_uint8_to_ps(pSrcCol + column - i);
-                __m256 bot = cast_uint8_to_ps(pSrcCol + column + i);
-#ifdef __FMA__
-                // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_fmadd_ps&ig_expand=4044,1866,1664,4687,3107
-                result = _mm256_fmadd_ps(top, weight, result);
-                result = _mm256_fmadd_ps(bot, weight, result);
-#else
-                result = _mm256_add_ps(_mm256_mul_ps(top, vw[i]), result);
-                result = _mm256_add_ps(_mm256_mul_ps(bot, vw[i]), result);
-#endif
-            }
-#ifdef __FMA__
-            // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps&ig_expand=4044,1866,1664,4687,3107,4687
-            result = _mm256_mul_ps(result, normalizationFactor);
-#else
-            __m256 denominator = _mm256_set1_ps(weightSum);
-            result = _mm256_div_ps(result, denominator);
-#endif
-            // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_storeu_ps&ig_expand=4044,1866,1664,4687,3107,4687,6482,6543
-            _mm256_storeu_ps(pDstCol + column, result);
-
-            column += numLanes;
-        }
-
-        calculate_middle_tail(pSrcCol, pDstCol, weights, centerWeight, weightSum, radius, column, middleEndExclusive);
-    }
-    void calculate_column_border(
-        const std::uint8_t* pSrcCol,
-        std::int32_t stride,
-        float* pDstCol,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t height,
-        std::int32_t column)
-    {
-        float result = centerWeight * static_cast<float>(pSrcCol[column * stride]);
-        float sumW = centerWeight;
-        for (std::int32_t i = 1; i <= radius; ++i)
-        {
-            std::int32_t colTop = column - i;
-            std::int32_t colBottom = column + i;
-            if (colTop >= 0)
-            {
-                result += weights[i] * static_cast<float>(pSrcCol[colTop * stride]);
-                sumW += weights[i];
-            }
-            if (colBottom < height)
-            {
-                result += weights[i] * static_cast<float>(pSrcCol[colBottom * stride]);
-                sumW += weights[i];
+                });
+                ++tasks;
             }
         }
-        pDstCol[column * stride] = result / sumW;
     }
-    void calculate_bottom_border(
-        const std::uint8_t* pSrcCol,
-        float* pDstCol,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t stride,
-        std::int32_t height)
+    [[nodiscard]] std::int64_t num_transpose_tasks(std::int32_t width, std::int32_t height, std::int32_t numBlocks)
     {
-        assert(radius < height);
-        std::int32_t start = height - radius;
-        for (std::int32_t y = start; y < height; ++y)
+        auto ceil = [](std::int32_t value, std::int32_t denominator)
         {
-            calculate_column_border(pSrcCol, stride, pDstCol, weights, centerWeight, radius, height, y);
-        }
-    }
-    void calculate_top_border(
-        const std::uint8_t* pSrcCol,
-        float* pDstCol,
-        const Weights& weights,
-        float centerWeight,
-        std::int32_t radius,
-        std::int32_t stride,
-        std::int32_t height)
-    {
-        assert(radius < height);
-        for (std::int32_t y = 0; y < radius; ++y)
-        {
-            calculate_column_border(pSrcCol, stride, pDstCol, weights, centerWeight, radius, height, y);
-        }
-    }
-    [[nodiscard]] auto make_vertical_pass_task(Latch& latch,
-                                            const Weights& weights,
-                                            float weightSum,
-                                            float centerWeight,
-                                            __m256 centerWeightAvx,
-                                            __m256 normalizationFactor,
-                                            std::int32_t radius,
-                                            std::int32_t width,
-                                            std::int32_t height,
-                                            const std::uint8_t* pSrcCol,
-                                            float* pDstCol)
-    {
-        return [&latch, &weights, weightSum, centerWeight, centerWeightAvx, normalizationFactor, radius, width, height, pSrcCol, pDstCol]()
-        {
-            calculate_bottom_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
-
-            calculate_column_middle(
-                pSrcCol,
-                pDstCol,
-                weights,
-                centerWeight,
-                weightSum,
-                radius,
-                height,
-                width,
-                normalizationFactor,
-                centerWeightAvx);
-
-            calculate_top_border(pSrcCol, pDstCol, weights, centerWeight, radius, width, height);
-
-            latch.count_down();
+            return (value + denominator - 1) / denominator;
         };
+        return ceil(width, numBlocks) * ceil(height, numBlocks);
     }
-    void vertical_pass(ThreadPool& tp,
-                        Latch& latch,
-                        const Weights& weights,
-                        float weightSum,
-                        std::int32_t radius,
-                        std::int32_t width,
-                        std::int32_t height,
-                        std::span<const std::uint8_t> src,
-                        std::span<float> dst)
+    void interleave_results(ThreadPool& tp, const gaussian::ScratchImage& results, std::span<std::uint8_t> outInterleaved)
     {
-        __m256 normalizationFactor = _mm256_set1_ps(1.0f / weightSum);
-        float centerWeight = weights.front();
-        __m256 centerWeightAvx = _mm256_set1_ps(centerWeight);
+        auto numTasks = static_cast<std::int64_t>(tp.thread_count());
+        std::int64_t rowsPerTask = (static_cast<std::int64_t>(results.height) + numTasks - 1) / numTasks;
 
-        for (std::size_t x = 0; x < static_cast<std::size_t>(width); ++x)
+        Latch latch{ numTasks };
+        for (std::int64_t task = 0; task < numTasks; ++task)
         {
-            const std::uint8_t* pSrcCol = std::addressof(src[x]);
-            float* pDstCol = std::addressof(dst[x]);
-
-            tp.add_task(
-                make_vertical_pass_task(
-                    latch,
-                    weights,
-                    weightSum,
-                    centerWeight,
-                    centerWeightAvx,
-                    normalizationFactor,
-                    radius,
-                    width,
-                    height,
-                    pSrcCol,
-                    pDstCol));
+            std::int64_t start = task * rowsPerTask;
+            std::int64_t end = std::min(static_cast<std::int64_t>(results.height), start + rowsPerTask);
+            tp.add_task([&latch, &results, outInterleaved, start, end]()
+            {
+                for (std::int64_t row = start; row < end; ++row)
+                {
+                    std::int64_t firstSrcElement = row * results.width;
+                    std::int64_t firstDstElement = firstSrcElement * 3;
+                    for (int x = 0; x < results.width; ++x)
+                    {
+                        outInterleaved[firstDstElement + 3 * x + 0] = static_cast<std::uint8_t>(results.red[firstSrcElement + x]);
+                        outInterleaved[firstDstElement + 3 * x + 1] = static_cast<std::uint8_t>(results.green[firstSrcElement + x]);
+                        outInterleaved[firstDstElement + 3 * x + 2] = static_cast<std::uint8_t>(results.blue[firstSrcElement + x]);
+                    }
+                }
+                latch.count_down();
+            });
         }
+
+        latch.wait();
     }
 }   // namespace
 namespace gaussian
 {
-    Image& add_blur(ThreadPool& tp, Image& image, std::int32_t radius)
+    std::vector<std::uint8_t> add_blur(ThreadPool& tp, Image& image, std::int32_t radius)
     {
         assert(image.red.size() == image.green.size());
         assert(image.green.size() == image.blue.size());
 
         Weights w = calculate_weights(radius);
         float weightSum = calc_weight_sum(w, radius);
+        alignas(32) static std::array<__m256, MAX_RADIUS + 1> vWeights{};
+        for (std::size_t i = 0; i < w.size(); ++i)
+        {
+            vWeights[i] = _mm256_set1_ps(w[i]);
+        }
 
         ScratchImage scratch = make_scratch_image(image);
 
         // Horizontal pass per color channel
+        static constexpr std::int32_t numChannels = 3;
+        static constexpr std::int32_t blocksPerTask = 64;
         {
-            std::int64_t numTasks = image.height * 3; // One task for each row for each color channel
+            std::int64_t numTasks = required_block_tasks(image.height, blocksPerTask) * numChannels;
             Latch latch{ numTasks };
-            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
-            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
-            horizontal_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
 
             latch.wait();
         }
 
-
-        // number of SIMD lanes used by to_uint8
-        static constexpr std::size_t numLanes = 8;
-        static constexpr std::size_t iterationsPerTask = 64;
-        auto[simdTasks, hasTail] = to_uint8_required_num_tasks(scratch.red, numLanes, iterationsPerTask);
-        std::int64_t uint8Tasks = simdTasks * 3;
-        if (hasTail)
+        static constexpr std::int32_t blockSize = 64;
+        ScratchImage transposed = make_scratch_image(image);
         {
-            uint8Tasks += 3;
-        }
+            std::int32_t srcStride = image.width;
+            std::int32_t dstStride = image.height;
+            Latch latch(num_transpose_tasks(image.width, image.height, blockSize) * numChannels);
 
-        {
-            Latch latch{ uint8Tasks };
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.red, image.red);
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.green, image.green);
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.blue, image.blue);
+            transpose(tp, latch, scratch.red, srcStride, transposed.red, dstStride, image.width, image.height, blockSize);
+            transpose(tp, latch, scratch.green, srcStride, transposed.green, dstStride, image.width, image.height, blockSize);
+            transpose(tp, latch, scratch.blue, srcStride, transposed.blue, dstStride, image.width, image.height, blockSize);
+
             latch.wait();
         }
 
+        to_uint8(tp, transposed.red, image.red);
+        to_uint8(tp, transposed.green, image.green);
+        to_uint8(tp, transposed.blue, image.blue);
 
         // Vertical pass per color channel
         {
-            std::int64_t numTasks = image.width * 3; // One task for each row for each color channel
+            std::int64_t numTasks = required_block_tasks(image.height, blocksPerTask) * numChannels;
             Latch latch{ numTasks };
-            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
-            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
-            vertical_pass(tp, latch, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
 
             latch.wait();
         }
 
         {
-            Latch latch{ uint8Tasks };
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.red, image.red);
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.green, image.green);
-            to_uint8(tp, latch, simdTasks, hasTail, iterationsPerTask, scratch.blue, image.blue);
+            std::int32_t srcStride = image.height;
+            std::int32_t dstStride = image.width;
+            Latch latch(num_transpose_tasks(image.width, image.height, blockSize) * numChannels);
+
+            transpose(tp, latch, scratch.red, srcStride, transposed.red, dstStride, image.width, image.height, blockSize);
+            transpose(tp, latch, scratch.green, srcStride, transposed.green, dstStride, image.width, image.height, blockSize);
+            transpose(tp, latch, scratch.blue, srcStride, transposed.blue, dstStride, image.width, image.height, blockSize);
+
             latch.wait();
         }
 
-        return image;
+        std::vector<std::uint8_t> interleavedResult(image.width * image.height * numChannels);
+        interleave_results(tp, transposed, interleavedResult);
+
+        return interleavedResult;
     }
 }    // namespace gaussian

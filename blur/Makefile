@@ -30,7 +30,3 @@ gaussian: optimization2/gaussian.hpp optimization2/gaussian.cpp
 clean:
 	rm -rf verify pearson pearson_par optimization1/*.ii optimization1/*.o optimization1/*.s optimization2/*.ii optimization2/*.o optimization2/*.s optimization3/*.ii optimization3/*.o optimization3/*.s optimization4/*.ii optimization4/*.o optimization4/*.s optimization5/*.ii optimization5/*.o optimization5/*.s *.res *.args.0 *.ltrans_args *.ltrans.out *.ii *.s *.o *.dSYM 2> /dev/null
 
-
-Red: 187, 185, 185, 184, 182, 181
-Green: 8, 6, 3, 3, 3, 2
-Blue: 104, 101, 100, 100, 96 ,95

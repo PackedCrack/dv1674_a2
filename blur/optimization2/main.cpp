@@ -9,15 +9,13 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <fstream>
+#include <cstring>
+#include <span>
 
 
 namespace
 {
-    // hack because i'm to lazy to write output logic for the PPM header.
-    std::string s_PpmHeader{};
-    //
-    //
+    std::string s_PpmHeader{};  // hack because i'm to lazy to write output logic for the PPM header.
     class File
     {
     public:
@@ -195,14 +193,28 @@ namespace
 
         return image;
     }
+    void save_results(const char* filepath, std::span<const std::uint8_t> results)
+    {
+        std::int32_t fileDescriptor = open(filepath, O_CREAT | O_TRUNC | O_RDWR, 0644);
+        assert(fileDescriptor >= 0);
+
+        std::size_t filesize = s_PpmHeader.size() + results.size();
+        ftruncate(fileDescriptor, static_cast<off_t>(filesize));
+
+        void* pMap = mmap(nullptr, filesize, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor, 0);
+        assert(pMap != MAP_FAILED);
+
+        char* pWrite = static_cast<char*>(pMap);
+        std::memcpy(pWrite, s_PpmHeader.data(), s_PpmHeader.size());
+        pWrite += s_PpmHeader.size();
+        std::memcpy(pWrite, results.data(), results.size());
+
+        munmap(pMap, filesize);
+        close(fileDescriptor);
+    }
 } // namespace
 int main(int argc, char const** argv)
 {
-    //if (argc != 4) {
-    //    std::cerr << "Usage: " << argv[0] << " [radius] [infile] [outfile]" << std::endl;
-    //    std::exit(1);
-    //}
-
     std::int32_t numThreads = std::stoi(argv[4]);
     ThreadPool tp{ numThreads };
     gaussian::Image image = load(tp, argv[2]);
@@ -214,38 +226,8 @@ int main(int argc, char const** argv)
         return 1;
     }
 
-    //gaussian::BlurredImage result = gaussian::add_blur(tp, image, radius);
+    std::vector<std::uint8_t> result = gaussian::add_blur(tp, image, radius);
+    save_results(argv[3], result);
 
-    image = gaussian::add_blur(tp, image, radius);
-
-    std::fstream output{ argv[3], std::ios::out | std::ios::binary | std::ios::trunc };
-    assert(output.is_open());
-
-    output.write(s_PpmHeader.data(), s_PpmHeader.size());
-    for (std::size_t i = 0; i < image.red.size(); ++i)
-    {
-        output.write(reinterpret_cast<const char*>(&image.red[i]), sizeof(std::uint8_t));
-        output.write(reinterpret_cast<const char*>(&image.green[i]), sizeof(std::uint8_t));
-        output.write(reinterpret_cast<const char*>(&image.blue[i]), sizeof(std::uint8_t));
-    }
-
-
-
-
-    //if (result.red[0] == 0)
-    //{
-    //    std::printf("\nBlur failed");
-    //}
     return 0;
-
-    //PPM::Reader reader {};
-    //PPM::Writer writer {};
-//
-    //auto m { reader(argv[2]) };
-    //auto radius { static_cast<unsigned>(std::stoul(argv[1])) };
-//
-    //auto blurred { Filter::blur(m, radius) };
-    //writer(blurred, argv[3]);
-//
-    //return 0;
 }
