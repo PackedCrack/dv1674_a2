@@ -1,5 +1,5 @@
 CXX2=g++-13
-CXXFLAGS2=-std=c++20 -g -O3 -flto -march=native -pthread -save-temps=obj -fverbose-asm -masm=intel -Wall -Wunused -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wuseless-cast
+CXXFLAGS2=-std=c++20 -g -O3 -DNDEBUG -flto -march=native -pthread -save-temps=obj -fverbose-asm -masm=intel -Wall -Wunused -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wuseless-cast
 
 CXX=g++
 CXXFLAGS=-std=c++17 -g -Wunused -Wall -Wunused
@@ -30,3 +30,5 @@ gaussian: optimization2/gaussian.hpp optimization2/gaussian.cpp
 clean:
 	rm -rf verify pearson pearson_par optimization1/*.ii optimization1/*.o optimization1/*.s optimization2/*.ii optimization2/*.o optimization2/*.s optimization3/*.ii optimization3/*.o optimization3/*.s optimization4/*.ii optimization4/*.o optimization4/*.s optimization5/*.ii optimization5/*.o optimization5/*.s *.res *.args.0 *.ltrans_args *.ltrans.out *.ii *.s *.o *.dSYM 2> /dev/null
 
+
+# -fsanitize=address,undefined -fno-omit-frame-pointer 

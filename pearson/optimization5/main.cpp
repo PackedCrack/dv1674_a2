@@ -176,7 +176,7 @@ namespace
     {
         // The File RAII wrapper wasn't written with writing in mind so its easier to just do this raw..
         std::int32_t fileDescriptor = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, 0644);
-        assert(fileDescriptor == 0);
+        assert(fileDescriptor >= 0);
 
         static constexpr std::size_t maxLineSize = 128;
         std::size_t maxFilesize = results.size() * maxLineSize;

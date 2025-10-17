@@ -552,11 +552,11 @@ namespace gaussian
 
         // Vertical pass per color channel
         {
-            std::int64_t numTasks = required_block_tasks(image.height, blocksPerTask) * numChannels;
+            std::int64_t numTasks = required_block_tasks(image.width, blocksPerTask) * numChannels;
             Latch latch{ numTasks };
-            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
-            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
-            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.blue, scratch.blue);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.height, image.width, image.red, scratch.red);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.height, image.width, image.green, scratch.green);
+            horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.height, image.width, image.blue, scratch.blue);
 
             latch.wait();
         }
@@ -566,9 +566,9 @@ namespace gaussian
             std::int32_t dstStride = image.width;
             Latch latch(num_transpose_tasks(image.width, image.height, blockSize) * numChannels);
 
-            transpose(tp, latch, scratch.red, srcStride, transposed.red, dstStride, image.width, image.height, blockSize);
-            transpose(tp, latch, scratch.green, srcStride, transposed.green, dstStride, image.width, image.height, blockSize);
-            transpose(tp, latch, scratch.blue, srcStride, transposed.blue, dstStride, image.width, image.height, blockSize);
+            transpose(tp, latch, scratch.red, srcStride, transposed.red, dstStride, image.height, image.width, blockSize);
+            transpose(tp, latch, scratch.green, srcStride, transposed.green, dstStride, image.height, image.width, blockSize);
+            transpose(tp, latch, scratch.blue, srcStride, transposed.blue, dstStride, image.height, image.width, blockSize);
 
             latch.wait();
         }
