@@ -51,9 +51,9 @@ namespace
         return scratch;
     }
     [[nodiscard]] std::int64_t required_block_tasks(std::int32_t total,
-                                                    std::int32_t block)
+                                                    std::int32_t numRows)
     {
-        return (static_cast<std::int64_t>(total) + block - 1) / block;
+        return (static_cast<std::int64_t>(total) + numRows - 1) / numRows;
     }
     [[nodiscard]] __m256 cast_uint8_to_ps(const uint8_t* pValue)
     {
@@ -521,9 +521,9 @@ namespace gaussian
 
         // Horizontal pass per color channel
         static constexpr std::int32_t numChannels = 3;
-        static constexpr std::int32_t blocksPerTask = 64;
+        static constexpr std::int32_t rowsPerTask = 64;
         {
-            std::int64_t numTasks = required_block_tasks(image.height, blocksPerTask) * numChannels;
+            std::int64_t numTasks = required_block_tasks(image.height, rowsPerTask) * numChannels;
             Latch latch{ numTasks };
             horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.red, scratch.red);
             horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.width, image.height, image.green, scratch.green);
@@ -552,7 +552,7 @@ namespace gaussian
 
         // Vertical pass per color channel
         {
-            std::int64_t numTasks = required_block_tasks(image.width, blocksPerTask) * numChannels;
+            std::int64_t numTasks = required_block_tasks(image.width, rowsPerTask) * numChannels;
             Latch latch{ numTasks };
             horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.height, image.width, image.red, scratch.red);
             horizontal_pass(tp, latch, vWeights, w, weightSum, radius, image.height, image.width, image.green, scratch.green);

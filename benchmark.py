@@ -292,7 +292,7 @@ def blur_benchmark():
         "./blur_result/im4"
     ]
 
-    threads = [1]#, 3, 6, 9, 12]
+    threads = [1, 3, 6, 9, 12]
     for index in range(0, 4):
         for threadCount in threads:
             i = inData[index]
