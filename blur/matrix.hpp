@@ -8,7 +8,7 @@ Author: David Holmqvist <daae19@student.bth.se>
 #define MATRIX_HPP
 
 class Matrix {
-private:
+public:
     unsigned char* R;
     unsigned char* G;
     unsigned char* B;
